@@ -6,18 +6,10 @@ from sqlalchemy import (
     String,
     DateTime,
     Numeric,
-    Integer,
-    BigInteger,
     ForeignKey,
-    UniqueConstraint,
-    JSON,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from app.database import Base
-
-# Compatible array type: PostgreSQL native ARRAY(String), fallback to JSON for SQLite in unit tests
-TextListType = ARRAY(String).with_variant(JSON, "sqlite")
-PrimaryKeyType = Integer().with_variant(BigInteger, "postgresql")
 
 
 class Machine(Base):
@@ -37,7 +29,7 @@ class Machine(Base):
     last_state = Column(String(32), nullable=True)
     last_temp = Column(Numeric(5, 2), nullable=True)
     last_cooling = Column(String(32), nullable=True)
-    active_faults = Column(TextListType, nullable=False, default=list)
+    active_faults = Column(ARRAY(String), nullable=False, default=list)
 
     # Updated on every valid incoming report
     last_received_at = Column(DateTime(timezone=True), nullable=True)
@@ -76,24 +68,18 @@ class Machine(Base):
 class Telemetry(Base):
     __tablename__ = "telemetry"
 
-    id = Column(PrimaryKeyType, primary_key=True, autoincrement=True)
     machine_id = Column(
         String(64),
         ForeignKey("machines.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
+        primary_key=True,
     )
-    ts = Column(DateTime(timezone=True), nullable=False, index=True)
+    ts = Column(DateTime(timezone=True), primary_key=True)
     cabinet_temp_c = Column(Numeric(5, 2), nullable=True)
     cooling_status = Column(String(32), nullable=True)
     operating_state = Column(String(32), nullable=True)
-    error_codes = Column(TextListType, nullable=False, default=list)
+    error_codes = Column(ARRAY(String), nullable=False, default=list)
     received_at = Column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
-    )
-
-    __table_args__ = (
-        UniqueConstraint("machine_id", "ts", name="uq_machine_telemetry_ts"),
     )

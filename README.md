@@ -14,7 +14,45 @@ Fleet monitoring and telemetry ingestion platform for Bear & Berry automated smo
 
 ---
 
-## 🚀 Quickstart
+## 🐘 Setting Up the Test Database
+
+The test suite runs against a real PostgreSQL 16 database.
+
+### 1. Create the Test Database (if not already created)
+Using `psql`:
+```powershell
+$env:PGPASSWORD = "vendforge_secret"
+& "C:\Program Files\PostgreSQL\16\bin\psql.exe" -U vendforge -h localhost -c "CREATE DATABASE vendforge_test;"
+```
+
+### 2. Configure Test Connection (Optional)
+By default, tests connect to:
+```
+postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge_test
+```
+You can override this by setting `TEST_DATABASE_URL`:
+```powershell
+$env:TEST_DATABASE_URL = "postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge_test"
+```
+
+---
+
+## 🧪 Run Tests
+
+Execute the automated test suite against PostgreSQL 16:
+```powershell
+Set-Location "C:\Users\HAMMAD KHAN\.gemini\antigravity\scratch\vendforge"
+.\.venv\Scripts\pytest -v
+```
+
+The test runner:
+1. Applies `db/init.sql` to `vendforge_test` automatically once per test session (`conftest.py`).
+2. Truncates tables before each test (`TRUNCATE TABLE machines, telemetry RESTART IDENTITY CASCADE`) ensuring complete test isolation.
+3. Tests genuine PostgreSQL transaction rollback under database-level data errors (`NUMERIC(5,2)` overflow).
+
+---
+
+## 🚀 Running the API
 
 ### Option A: Run via Docker Compose (PostgreSQL 16 + API)
 ```bash
@@ -25,18 +63,8 @@ API runs on `http://localhost:8000`. Health check: `http://localhost:8000/health
 ### Option B: Run Locally with Python 3.12
 ```powershell
 Set-Location "C:\Users\HAMMAD KHAN\.gemini\antigravity\scratch\vendforge"
-.\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
----
-
-## 🧪 Run Tests
-
-Execute the automated test suite covering all reliability scenarios:
-```powershell
-Set-Location "C:\Users\HAMMAD KHAN\.gemini\antigravity\scratch\vendforge"
-.\.venv\Scripts\pytest -v
+$env:DATABASE_URL = "postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge"
+.\.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ---
@@ -113,7 +141,8 @@ curl -X GET "http://localhost:8000/machines/bb-101/history?limit=50"
 ---
 
 ## 🔒 Reliability Highlights
-- **Idempotent Ingestion**: Duplicates on `(machine_id, ts)` return `"status": "duplicate"` and are ignored.
+- **Real PostgreSQL Schema**: Primary key on `telemetry(machine_id, ts)`, native `TEXT[]` arrays for errors.
+- **Idempotent Ingestion**: Duplicates on `(machine_id, ts)` return `"status": "duplicate"` via `ON CONFLICT DO NOTHING`.
 - **Out-of-Order Safety**: State snapshots only update if `ts > last_event_ts`.
 - **Atomic Batches**: One database transaction per batch. If a mid-batch error occurs, the entire batch rolls back (HTTP 500) so the machine can retry.
 - **Clock Drift Rejection**: Future timestamps $> \text{now} + 5\text{ min}$ are rejected.

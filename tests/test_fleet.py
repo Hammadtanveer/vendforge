@@ -1,46 +1,7 @@
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from app.database import Base, get_db
-from app.main import app
-from app.models import Machine
-
-# In-memory SQLite test database shared across threads
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-@pytest.fixture(autouse=True)
-def setup_db():
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
+from app.models import Machine, Telemetry
 
 
 def test_machine_registration_and_unknown_status(client):
@@ -264,30 +225,32 @@ def test_reconnect_burst_batch(client):
     assert hist_resp.status_code == 200
     history = hist_resp.json()
     assert len(history) == 3
-    assert history[0]["ts"].startswith(t3[:19])
-    assert history[1]["ts"].startswith(t2[:19])
-    assert history[2]["ts"].startswith(t1[:19])
+    ts0 = datetime.fromisoformat(history[0]["ts"])
+    ts1 = datetime.fromisoformat(history[1]["ts"])
+    ts2 = datetime.fromisoformat(history[2]["ts"])
+    assert ts0 > ts1 > ts2
+    assert ts0 == datetime.fromisoformat(t3)
+    assert ts1 == datetime.fromisoformat(t2)
+    assert ts2 == datetime.fromisoformat(t1)
 
 
-def test_offline_threshold_derivation(client):
+def test_offline_threshold_derivation(client, db_session):
     """Machine status derives to OFFLINE when now - last_received_at > 180s."""
     client.post(
         "/machines",
         json={"id": "bb-106", "name": "Machine 106", "customer_location": "Campus"},
     )
 
-    db = TestingSessionLocal()
-    # Artificially set last_received_at to 200s ago
+    # Artificially set last_received_at to 200s ago in PostgreSQL
     past_rec = datetime.now(timezone.utc) - timedelta(seconds=200)
-    db.query(Machine).filter(Machine.id == "bb-106").update(
+    db_session.query(Machine).filter(Machine.id == "bb-106").update(
         {
             "last_received_at": past_rec,
             "last_event_ts": past_rec,
             "last_state": "IDLE",
         }
     )
-    db.commit()
-    db.close()
+    db_session.commit()
 
     resp = client.get("/machines/bb-106")
     assert resp.status_code == 200
@@ -333,33 +296,54 @@ def test_batch_size_cap(client):
     assert resp.status_code == 422
 
 
-def test_mid_batch_error_rollback(client, monkeypatch):
-    """If DB error occurs mid-batch, whole batch rolls back and returns 500."""
-    from unittest.mock import MagicMock
-    from app.routers import telemetry as telemetry_router
-
+def test_mid_batch_error_rollback(client, db_session):
+    """
+    Test atomic transaction rollback under a REAL PostgreSQL database failure.
+    Item 1 is valid, item 2 triggers a real PostgreSQL numeric overflow error
+    (cabinet_temp_c=9999.99 overflows NUMERIC(5,2)).
+    No monkeypatching.
+    Assert: API returns 5xx, zero telemetry rows exist, and machine snapshot is untouched.
+    """
     client.post(
         "/machines",
         json={"id": "bb-108", "name": "Machine 108", "customer_location": "Plaza"},
     )
 
-    def mock_ingest_failure(*args, **kwargs):
-        raise RuntimeError("Simulated mid-batch database connection crash")
+    base_time = datetime.now(timezone.utc)
+    t1 = (base_time - timedelta(minutes=2)).isoformat()
+    t2 = (base_time - timedelta(minutes=1)).isoformat()
 
-    monkeypatch.setattr(telemetry_router, "ingest_telemetry_batch", mock_ingest_failure)
-
-    now_ts = datetime.now(timezone.utc).isoformat()
     resp = client.post(
         "/telemetry",
         json={
             "items": [
                 {
                     "machine_id": "bb-108",
-                    "ts": now_ts,
+                    "ts": t1,
                     "cabinet_temp_c": 4.0,
-                }
+                    "operating_state": "IDLE",
+                },
+                {
+                    "machine_id": "bb-108",
+                    "ts": t2,
+                    "cabinet_temp_c": 9999.99,  # Genuine PostgreSQL numeric overflow
+                    "operating_state": "VENDING",
+                },
             ]
         },
     )
+    # 1. API must return 5xx (HTTP 500)
     assert resp.status_code == 500
-    assert "Database error mid-batch, rolled back" in resp.json()["detail"]
+    assert "Database error mid-batch" in resp.json()["detail"]
+
+    # 2. Zero telemetry rows exist in PostgreSQL after transaction rollback
+    telemetry_count = db_session.query(Telemetry).filter(Telemetry.machine_id == "bb-108").count()
+    assert telemetry_count == 0
+
+    # 3. Machine snapshot is completely unchanged (no partial writes)
+    machine = db_session.get(Machine, "bb-108")
+    assert machine.last_event_ts is None
+    assert machine.last_state is None
+    assert machine.last_temp is None
+    assert machine.last_received_at is None
+    assert machine.derive_status() == "UNKNOWN"

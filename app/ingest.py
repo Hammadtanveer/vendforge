@@ -1,9 +1,8 @@
 from datetime import datetime, timezone, timedelta
-from typing import List, Tuple
+from typing import List
 from sqlalchemy.orm import Session
 from sqlalchemy import update, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.models import Machine, Telemetry
 from app.schemas import TelemetryItem, ItemIngestResult, TelemetryBatchResponse
@@ -31,9 +30,6 @@ def ingest_telemetry_batch(db: Session, items: List[TelemetryItem]) -> Telemetry
     existing_machines = set(
         row[0] for row in db.query(Machine.id).filter(Machine.id.in_(machine_ids)).all()
     )
-
-    is_sqlite = db.bind.dialect.name == "sqlite"
-    insert_fn = sqlite_insert if is_sqlite else pg_insert
 
     results: List[ItemIngestResult] = []
     inserted_count = 0
@@ -74,7 +70,7 @@ def ingest_telemetry_batch(db: Session, items: List[TelemetryItem]) -> Telemetry
 
         # 3. Ingest Step 1: INSERT INTO telemetry ... ON CONFLICT (machine_id, ts) DO NOTHING
         stmt = (
-            insert_fn(Telemetry)
+            pg_insert(Telemetry)
             .values(
                 machine_id=item.machine_id,
                 ts=item_ts,
@@ -85,7 +81,7 @@ def ingest_telemetry_batch(db: Session, items: List[TelemetryItem]) -> Telemetry
                 received_at=now,
             )
             .on_conflict_do_nothing(index_elements=["machine_id", "ts"])
-            .returning(Telemetry.id)
+            .returning(Telemetry.machine_id)
         )
         insert_res = db.execute(stmt).fetchone()
 

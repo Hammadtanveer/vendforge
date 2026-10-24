@@ -18,7 +18,6 @@ CREATE TABLE IF NOT EXISTS machines (
 );
 
 CREATE TABLE IF NOT EXISTS telemetry (
-    id BIGSERIAL PRIMARY KEY,
     machine_id VARCHAR(64) NOT NULL REFERENCES machines(id) ON DELETE CASCADE,
     ts TIMESTAMPTZ NOT NULL,
     cabinet_temp_c NUMERIC(5, 2),
@@ -26,8 +25,7 @@ CREATE TABLE IF NOT EXISTS telemetry (
     operating_state VARCHAR(32),
     error_codes TEXT[] NOT NULL DEFAULT '{}',
     received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    -- Prevent duplicate telemetry events for the same machine at the same timestamp
-    CONSTRAINT uq_machine_telemetry_ts UNIQUE (machine_id, ts)
+    PRIMARY KEY (machine_id, ts)
 );
 
 -- Index for fast retrieval ordered by machine event timestamp (ts)
