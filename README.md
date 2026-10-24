@@ -1,91 +1,134 @@
 # VendForge Fleet Management System
 
-Fleet monitoring and telemetry ingestion platform for Bear & Berry automated smoothie vending machines.
+A high-reliability fleet monitoring and telemetry ingestion backend for Bear & Berry automated smoothie vending machines.
 
 ---
 
 ## 🛠 Tech Stack
-- **Python 3.12** & **FastAPI**
-- **Pydantic v2** & **SQLAlchemy 2.0**
-- **PostgreSQL 16** (Driver: `psycopg3`)
-- **Docker & Docker Compose**
-- **Pytest** & **HTTPX**
-- Direct schema initialization: `db/init.sql` (no Alembic)
+- **Python 3.12**
+- **FastAPI** (Async Web Framework)
+- **Pydantic v2** (Validation & Serialization)
+- **PostgreSQL 16** (Primary Datastore via `psycopg3`)
+- **SQLAlchemy 2.0** (ORM & Core Query Builder)
+- **Pytest** & **HTTPX** (Automated Integration Testing)
+- Pure SQL schema migrations: `db/init.sql` (no Alembic)
 
 ---
 
-## 🐘 Setting Up the Test Database
+## 🐘 Local Setup with Native PostgreSQL
 
-The test suite runs against a real PostgreSQL 16 database.
+### 1. Prerequisites
+Ensure Python 3.12 and PostgreSQL 16 are installed and `psql` is available on your system `PATH`.
 
-### 1. Create the Test Database (if not already created)
-Using `psql`:
+### 2. Configure Database and User
+Create the `vendforge` application role and databases (`vendforge` for runtime, `vendforge_test` for automated tests):
+
 ```bash
-psql -U vendforge -h localhost -c "CREATE DATABASE vendforge_test;"
+# Set password for postgres superuser
+export PGPASSWORD="your_postgres_password"
+
+# Create user
+psql -U postgres -h localhost -c "CREATE USER vendforge WITH PASSWORD 'vendforge_secret';"
+
+# Create development and test databases
+psql -U postgres -h localhost -c "CREATE DATABASE vendforge OWNER vendforge;"
+psql -U postgres -h localhost -c "CREATE DATABASE vendforge_test OWNER vendforge;"
 ```
 
-### 2. Configure Test Connection (Optional)
-By default, tests connect to:
-```
-postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge_test
-```
-You can override this by setting `TEST_DATABASE_URL`:
+### 3. Initialize Runtime Schema
+Apply the base schema to the development database:
 ```bash
-export TEST_DATABASE_URL="postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge_test"
+export PGPASSWORD="vendforge_secret"
+psql -U vendforge -d vendforge -h localhost -f db/init.sql
+```
+
+### 4. Setup Python Virtual Environment
+```bash
+# Create and activate Python 3.12 venv
+python -m venv .venv
+
+# Windows
+.\.venv\Scripts\Activate.ps1
+# Linux / macOS
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ---
 
-## 🧪 Run Tests
+## 🧪 Running Automated Tests
 
-Execute the automated test suite against PostgreSQL 16:
+The test suite runs against real PostgreSQL 16 using `vendforge_test`. `tests/conftest.py` automatically resets the `public` schema and applies `db/init.sql` on startup, then truncates tables between tests for complete test isolation:
+
 ```powershell
-Set-Location "<path_to_project>/vendforge"
+# Set test connection string (defaults to local PostgreSQL 16)
+$env:TEST_DATABASE_URL = "postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge_test"
+
+# Run all 22 tests
 .\.venv\Scripts\pytest -v
 ```
 
-The test runner:
-1. Re-creates the public schema and applies `db/init.sql` to `vendforge_test` once per test session (`conftest.py`).
-2. Truncates tables before each test (`TRUNCATE TABLE machines, telemetry RESTART IDENTITY CASCADE`) ensuring complete test isolation.
-3. Tests genuine PostgreSQL transaction rollback under database-level data errors (`NUMERIC(5,2)` overflow).
-
 ---
 
-## 🚀 Running the API
+## 🚀 Running the API Server
 
-### Option A: Run via Docker Compose (PostgreSQL 16 + API)
-```bash
-docker compose up --build -d
-```
-API runs on `http://localhost:8000`. Health check: `http://localhost:8000/health`.
+Start the FastAPI application with Uvicorn:
 
-### Option B: Run Locally with Python 3.12
 ```powershell
-Set-Location "<path_to_project>/vendforge"
 $env:DATABASE_URL = "postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge"
 .\.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+Interactive API documentation (Swagger UI) is available at:
+`http://localhost:8000/docs`
+
 ---
 
-## 📡 API Usage Examples
+## 📡 API Usage Examples (cURL)
 
-### 1. Register a Machine
+### 1. Create Customer
+```bash
+curl -X POST http://localhost:8000/customers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "cust-01",
+    "name": "Bear & Berry Global"
+  }'
+```
+
+### 2. Create Location
+```bash
+curl -X POST http://localhost:8000/locations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "loc-01",
+    "customer_id": "cust-01",
+    "name": "Downtown Central Mall",
+    "address": "100 Market St, Level 2"
+  }'
+```
+
+### 3. Register a Machine
 ```bash
 curl -X POST http://localhost:8000/machines \
   -H "Content-Type: application/json" \
   -d '{
     "id": "bb-101",
-    "name": "Bear & Berry Station Central",
-    "customer_location": "Concourse A, Gate 4"
+    "name": "Kiosk #101",
+    "location_id": "loc-01"
   }'
 ```
 *Response*:
 ```json
 {
   "id": "bb-101",
-  "name": "Bear & Berry Station Central",
-  "customer_location": "Concourse A, Gate 4",
+  "name": "Kiosk #101",
+  "location_id": "loc-01",
+  "location_name": "Downtown Central Mall",
+  "customer_id": "cust-01",
+  "customer_name": "Bear & Berry Global",
   "created_at": "2026-10-24T12:00:00Z",
   "connectivity": "UNKNOWN",
   "operating_state": null,
@@ -97,9 +140,8 @@ curl -X POST http://localhost:8000/machines \
   "last_received_at": null
 }
 ```
-*Note*: `connectivity` is derived as `"UNKNOWN"` because the machine has never reported.
 
-### 2. Ingest Telemetry Batch (Up to 500 Items)
+### 4. Ingest Telemetry Batch (Up to 500 Items)
 ```bash
 curl -X POST http://localhost:8000/telemetry \
   -H "Content-Type: application/json" \
@@ -107,7 +149,7 @@ curl -X POST http://localhost:8000/telemetry \
     "items": [
       {
         "machine_id": "bb-101",
-        "ts": "2026-10-24T12:00:00Z",
+        "ts": "2026-10-24T12:01:00Z",
         "cabinet_temp_c": 3.8,
         "cooling_status": "NORMAL",
         "operating_state": "IDLE",
@@ -126,7 +168,7 @@ curl -X POST http://localhost:8000/telemetry \
   "results": [
     {
       "machine_id": "bb-101",
-      "ts": "2026-10-24T12:00:00Z",
+      "ts": "2026-10-24T12:01:00Z",
       "status": "inserted",
       "reason": null
     }
@@ -134,36 +176,39 @@ curl -X POST http://localhost:8000/telemetry \
 }
 ```
 
-### 3. List Machines (Derived at Read Time)
+### 5. List Machines with Filters
 ```bash
-curl -X GET http://localhost:8000/machines
-```
-*Status derivation rules*:
-- **Connectivity**:
-  - Never reported: `"UNKNOWN"`
-  - `now - last_received_at > 180s`: `"OFFLINE"`
-  - Otherwise: `"ONLINE"` (active faults do not alter connectivity)
-- **Operating State**:
-  - Exposes last known `operating_state` and `last_event_ts` even when OFFLINE.
-- **Faults**:
-  - `has_active_faults`: `true` if `active_faults` is non-empty.
+# Filter by location
+curl -X GET "http://localhost:8000/machines?location_id=loc-01"
 
-### 4. Inspect an Individual Machine
-```bash
-curl -X GET http://localhost:8000/machines/bb-101
+# Filter by derived connectivity (ONLINE | OFFLINE | UNKNOWN)
+curl -X GET "http://localhost:8000/machines?connectivity=ONLINE"
 ```
 
-### 5. View Historical Telemetry (Ordered by Event Timestamp `ts DESC`)
+### 6. Inspect Machine History
 ```bash
 curl -X GET "http://localhost:8000/machines/bb-101/history?limit=50"
 ```
 
 ---
 
-## 🔒 Reliability Highlights
-- **Real PostgreSQL Schema**: Primary key on `telemetry(machine_id, ts)`, native `TEXT[]` arrays for errors.
-- **Idempotent Ingestion**: Duplicates on `(machine_id, ts)` return `"status": "duplicate"` via `ON CONFLICT DO NOTHING`.
-- **Out-of-Order Safety**: State snapshots only update if `ts > last_event_ts`.
-- **Atomic Batches**: One database transaction per batch. If a mid-batch error occurs, the entire batch rolls back (HTTP 500) so the machine can retry.
-- **Clock Drift Rejection**: Future timestamps $> \text{now} + 5\text{ min}$ are rejected.
-- **Derived Status**: Reachability and state are strictly calculated at query time and never stored in the database.
+## 🤖 Running the Fleet Simulator
+
+The simulator executes an end-to-end flow with customer and location setup, normal reporting, fault generation, and burst uploads:
+
+```powershell
+.\.venv\Scripts\python scripts/simulate_fleet.py
+```
+
+---
+
+## 🐳 Docker Deployment Notice
+
+`docker-compose.yml` and `Dockerfile` are provided in the repository to define the containerized deployment environment (PostgreSQL 16 container mounting `db/init.sql` alongside the FastAPI container).
+
+> [!NOTE]
+> **Host Environment Status**: Docker is not installed on this development machine, so `docker-compose.yml` and `Dockerfile` are **UNVERIFIED in local live execution**.
+>
+> If running on a machine with Docker Desktop:
+> - Ensure no local native PostgreSQL service is occupying host port `5432` to avoid port collision.
+> - Execute: `docker compose up --build -d`

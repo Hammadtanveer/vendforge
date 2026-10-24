@@ -21,7 +21,7 @@
   - Automated session fixture applying `db/init.sql` and per-test `TRUNCATE CASCADE` isolation.
   - Real database error rollback test under `NUMERIC(5,2)` overflow.
 
-- [x] **Phase 4: Relational Customers & Locations (DONE)**
+- [x] **Phase 4: Relational Customers & Locations**
   - Normalized schema: `customers` $\rightarrow$ `locations` $\rightarrow$ `machines` with foreign key constraints.
   - Client-supplied IDs (`VARCHAR(64)`), duplicate ID returns 409.
   - `POST /customers`, `POST /locations` (validates `customer_id` or 404), `POST /machines` (validates `location_id` or 404).
@@ -35,3 +35,8 @@
   - Ensured `tests/conftest.py` drops and recreates `public` schema on session startup.
   - Strengthened rejection tests to verify zero telemetry rows persisted in PostgreSQL.
   - Added tests for offline state preservation, old-data-only reconnect, UNKNOWN on never reported, fault/connectivity orthogonality, and equal timestamp first-write-wins.
+
+- [x] **Phase 6: Documentation Synchronization & Repository Alignment (DONE)**
+  - Configured `.dockerignore` excluding `.venv/`, `__pycache__/`, `.pytest_cache/`, `.git/`, `*.py[cod]`, `pgdata/`, `.env`, `.env.*`, while allowing `.env.example`.
+  - Audited and refined `DESIGN.md` across all 10 sections: operational assumptions, scale math, data model, reliability matrix with test mappings, trade-offs, analytics SQL, scaling roadmap, failure modes, deferred features, and accurate concurrency analysis (documenting multi-machine deadlock risks and sorting mitigations).
+  - Maintained `README.md` with generic paths, native PostgreSQL setup, cURL examples using the split connectivity/state schema, and unverified Docker deployment notice.
