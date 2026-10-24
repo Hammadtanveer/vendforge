@@ -21,10 +21,13 @@
   - Automated session fixture applying `db/init.sql` and per-test `TRUNCATE CASCADE` isolation.
   - Real database error rollback test under `NUMERIC(5,2)` overflow.
 
-- [x] **Phase 4: Design Documentation & Simulator**
-  - `DESIGN.md` detailing architecture, scale math, reliability matrix, failure modes, and evolution.
-  - `README.md` with step-by-step setup and `curl` API examples.
-  - `scripts/simulate_fleet.py` for end-to-end fleet simulation.
+- [x] **Phase 4: Relational Customers & Locations (DONE)**
+  - Normalized schema: `customers` $\rightarrow$ `locations` $\rightarrow$ `machines` with foreign key constraints.
+  - Client-supplied IDs (`VARCHAR(64)`), duplicate ID returns 409.
+  - `POST /customers`, `POST /locations` (validates `customer_id` or 404), `POST /machines` (validates `location_id` or 404).
+  - `GET /machines` with `joinedload` (no N+1 queries) and filters: `?location_id=` and `?connectivity=` (`ONLINE`, `OFFLINE`, `UNKNOWN`, invalid returns 422).
+  - Enriched `MachineResponse` with `location_id`, `location_name`, `customer_id`, and `customer_name`.
+  - Updated fleet simulator with customer/location flows, UNKNOWN machine, and backdated OFFLINE demo.
 
 - [x] **Phase 5: Status Field Split & Test Hardening**
   - Separated `connectivity` (`ONLINE`, `OFFLINE`, `UNKNOWN`) from `operating_state` in `MachineResponse`.

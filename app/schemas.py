@@ -4,16 +4,47 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CustomerCreate(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=255)
+
+
+class CustomerResponse(BaseModel):
+    id: str
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LocationCreate(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    customer_id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=255)
+    address: Optional[str] = Field(None, max_length=512)
+
+
+class LocationResponse(BaseModel):
+    id: str
+    customer_id: str
+    name: str
+    address: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class MachineCreate(BaseModel):
     id: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=255)
-    customer_location: str = Field(..., min_length=1, max_length=255)
+    location_id: str = Field(..., min_length=1, max_length=64)
 
 
 class MachineResponse(BaseModel):
     id: str
     name: str
-    customer_location: str
+    location_id: str
+    location_name: str
+    customer_id: str
+    customer_name: str
     created_at: datetime
     connectivity: Literal["ONLINE", "OFFLINE", "UNKNOWN"]
     operating_state: Optional[str] = None

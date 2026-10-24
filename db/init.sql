@@ -1,10 +1,22 @@
 -- VendForge Fleet Management Database Initialization
 -- No Alembic: schema managed directly in this file
 
+CREATE TABLE IF NOT EXISTS customers (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS locations (
+    id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    address VARCHAR(512)
+);
+
 CREATE TABLE IF NOT EXISTS machines (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    customer_location VARCHAR(255) NOT NULL,
+    location_id VARCHAR(64) NOT NULL REFERENCES locations(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- Cached telemetry fields updated ONLY when incoming ts > last_event_ts
     last_event_ts TIMESTAMPTZ,
@@ -16,6 +28,9 @@ CREATE TABLE IF NOT EXISTS machines (
     last_received_at TIMESTAMPTZ
     -- Note: Machine status is DERIVED at read time. NEVER stored.
 );
+
+CREATE INDEX IF NOT EXISTS idx_machines_location_id 
+    ON machines (location_id);
 
 CREATE TABLE IF NOT EXISTS telemetry (
     machine_id VARCHAR(64) NOT NULL REFERENCES machines(id) ON DELETE CASCADE,

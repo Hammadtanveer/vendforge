@@ -8,8 +8,30 @@ from sqlalchemy import (
     Numeric,
     ForeignKey,
 )
+from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import ARRAY
 from app.database import Base
+
+
+class Customer(Base):
+    __tablename__ = "customers"
+
+    id = Column(String(64), primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+
+    locations = relationship("Location", back_populates="customer", cascade="all, delete-orphan")
+
+
+class Location(Base):
+    __tablename__ = "locations"
+
+    id = Column(String(64), primary_key=True, index=True)
+    customer_id = Column(String(64), ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    address = Column(String(512), nullable=True)
+
+    customer = relationship("Customer", back_populates="locations")
+    machines = relationship("Machine", back_populates="location")
 
 
 class Machine(Base):
@@ -17,12 +39,14 @@ class Machine(Base):
 
     id = Column(String(64), primary_key=True, index=True)
     name = Column(String(255), nullable=False)
-    customer_location = Column(String(255), nullable=False)
+    location_id = Column(String(64), ForeignKey("locations.id", ondelete="RESTRICT"), nullable=False, index=True)
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+
+    location = relationship("Location", back_populates="machines")
 
     # Cached telemetry snapshot (updated ONLY when event ts is strictly newer)
     last_event_ts = Column(DateTime(timezone=True), nullable=True)

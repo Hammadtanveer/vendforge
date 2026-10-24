@@ -35,7 +35,7 @@ def setup_test_database():
 def clean_database():
     """Truncate tables before each test to ensure complete test isolation."""
     with test_engine.connect() as conn:
-        conn.execute(text("TRUNCATE TABLE machines, telemetry RESTART IDENTITY CASCADE;"))
+        conn.execute(text("TRUNCATE TABLE customers, locations, machines, telemetry RESTART IDENTITY CASCADE;"))
         conn.commit()
     yield
 
@@ -64,3 +64,19 @@ def client():
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def default_location(client):
+    """Creates a default customer 'cust-1' and location 'loc-1', returns 'loc-1'."""
+    client.post("/customers", json={"id": "cust-1", "name": "Bear & Berry HQ"})
+    client.post(
+        "/locations",
+        json={
+            "id": "loc-1",
+            "customer_id": "cust-1",
+            "name": "Downtown Central",
+            "address": "100 Market St",
+        },
+    )
+    return "loc-1"
