@@ -20,9 +20,8 @@ The test suite runs against a real PostgreSQL 16 database.
 
 ### 1. Create the Test Database (if not already created)
 Using `psql`:
-```powershell
-$env:PGPASSWORD = "vendforge_secret"
-& "C:\Program Files\PostgreSQL\16\bin\psql.exe" -U vendforge -h localhost -c "CREATE DATABASE vendforge_test;"
+```bash
+psql -U vendforge -h localhost -c "CREATE DATABASE vendforge_test;"
 ```
 
 ### 2. Configure Test Connection (Optional)
@@ -31,8 +30,8 @@ By default, tests connect to:
 postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge_test
 ```
 You can override this by setting `TEST_DATABASE_URL`:
-```powershell
-$env:TEST_DATABASE_URL = "postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge_test"
+```bash
+export TEST_DATABASE_URL="postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge_test"
 ```
 
 ---
@@ -41,12 +40,12 @@ $env:TEST_DATABASE_URL = "postgresql+psycopg://vendforge:vendforge_secret@localh
 
 Execute the automated test suite against PostgreSQL 16:
 ```powershell
-Set-Location "C:\Users\HAMMAD KHAN\.gemini\antigravity\scratch\vendforge"
+Set-Location "<path_to_project>/vendforge"
 .\.venv\Scripts\pytest -v
 ```
 
 The test runner:
-1. Applies `db/init.sql` to `vendforge_test` automatically once per test session (`conftest.py`).
+1. Re-creates the public schema and applies `db/init.sql` to `vendforge_test` once per test session (`conftest.py`).
 2. Truncates tables before each test (`TRUNCATE TABLE machines, telemetry RESTART IDENTITY CASCADE`) ensuring complete test isolation.
 3. Tests genuine PostgreSQL transaction rollback under database-level data errors (`NUMERIC(5,2)` overflow).
 
@@ -62,7 +61,7 @@ API runs on `http://localhost:8000`. Health check: `http://localhost:8000/health
 
 ### Option B: Run Locally with Python 3.12
 ```powershell
-Set-Location "C:\Users\HAMMAD KHAN\.gemini\antigravity\scratch\vendforge"
+Set-Location "<path_to_project>/vendforge"
 $env:DATABASE_URL = "postgresql+psycopg://vendforge:vendforge_secret@localhost:5432/vendforge"
 .\.venv\Scripts\uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
@@ -81,7 +80,24 @@ curl -X POST http://localhost:8000/machines \
     "customer_location": "Concourse A, Gate 4"
   }'
 ```
-*Response*: Status is derived as `"UNKNOWN"` because the machine has never reported.
+*Response*:
+```json
+{
+  "id": "bb-101",
+  "name": "Bear & Berry Station Central",
+  "customer_location": "Concourse A, Gate 4",
+  "created_at": "2026-10-24T12:00:00Z",
+  "connectivity": "UNKNOWN",
+  "operating_state": null,
+  "has_active_faults": false,
+  "active_faults": [],
+  "last_event_ts": null,
+  "last_temp": null,
+  "last_cooling": null,
+  "last_received_at": null
+}
+```
+*Note*: `connectivity` is derived as `"UNKNOWN"` because the machine has never reported.
 
 ### 2. Ingest Telemetry Batch (Up to 500 Items)
 ```bash
@@ -118,15 +134,19 @@ curl -X POST http://localhost:8000/telemetry \
 }
 ```
 
-### 3. List Machines (Status Derived at Read Time)
+### 3. List Machines (Derived at Read Time)
 ```bash
 curl -X GET http://localhost:8000/machines
 ```
-*Machine status rules*:
-- Never reported: `"UNKNOWN"`
-- `now - last_received_at > 180s`: `"OFFLINE"`
-- Active faults non-empty: `"ERROR"`
-- Otherwise: `last_state` or `"ONLINE"`
+*Status derivation rules*:
+- **Connectivity**:
+  - Never reported: `"UNKNOWN"`
+  - `now - last_received_at > 180s`: `"OFFLINE"`
+  - Otherwise: `"ONLINE"` (active faults do not alter connectivity)
+- **Operating State**:
+  - Exposes last known `operating_state` and `last_event_ts` even when OFFLINE.
+- **Faults**:
+  - `has_active_faults`: `true` if `active_faults` is non-empty.
 
 ### 4. Inspect an Individual Machine
 ```bash
@@ -146,4 +166,4 @@ curl -X GET "http://localhost:8000/machines/bb-101/history?limit=50"
 - **Out-of-Order Safety**: State snapshots only update if `ts > last_event_ts`.
 - **Atomic Batches**: One database transaction per batch. If a mid-batch error occurs, the entire batch rolls back (HTTP 500) so the machine can retry.
 - **Clock Drift Rejection**: Future timestamps $> \text{now} + 5\text{ min}$ are rejected.
-- **Derived Status**: Status is strictly calculated at query time and never stored in the database.
+- **Derived Status**: Reachability and state are strictly calculated at query time and never stored in the database.

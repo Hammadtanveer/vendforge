@@ -19,12 +19,14 @@ TestSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_eng
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_database():
-    """Apply db/init.sql once per test session to the PostgreSQL test database."""
+    """Apply db/init.sql once per test session to a fresh public schema in the PostgreSQL test database."""
     init_sql_path = Path(__file__).resolve().parent.parent / "db" / "init.sql"
     with open(init_sql_path, "r", encoding="utf-8") as f:
         init_sql = f.read()
 
     with test_engine.connect() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public;"))
+        conn.commit()
         conn.execute(text(init_sql))
         conn.commit()
 

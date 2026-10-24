@@ -34,14 +34,14 @@ class Machine(Base):
     # Updated on every valid incoming report
     last_received_at = Column(DateTime(timezone=True), nullable=True)
 
-    def derive_status(self, now: Optional[datetime] = None) -> str:
+    def derive_connectivity(self, now: Optional[datetime] = None) -> str:
         """
-        Derives status at read time. Status is NEVER stored.
+        Derives connectivity at read time. Connectivity is NEVER stored.
         Rules:
         - Never reported -> UNKNOWN
         - now - last_received_at > 180s -> OFFLINE
-        - Has active faults -> ERROR
-        - Otherwise -> last_state or ONLINE
+        - Otherwise -> ONLINE
+        Faults do NOT change connectivity.
         """
         if self.last_received_at is None:
             return "UNKNOWN"
@@ -59,10 +59,7 @@ class Machine(Base):
         if (now - last_rec).total_seconds() > 180:
             return "OFFLINE"
 
-        if self.active_faults and len(self.active_faults) > 0:
-            return "ERROR"
-
-        return self.last_state or "ONLINE"
+        return "ONLINE"
 
 
 class Telemetry(Base):

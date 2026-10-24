@@ -11,19 +11,21 @@ router = APIRouter(prefix="/machines", tags=["machines"])
 
 
 def to_machine_response(machine: Machine) -> MachineResponse:
-    # Machine status is derived at read time, NEVER stored
-    derived_status = machine.derive_status()
+    # Connectivity is derived at read time, NEVER stored
+    conn = machine.derive_connectivity()
+    faults = machine.active_faults or []
     return MachineResponse(
         id=machine.id,
         name=machine.name,
         customer_location=machine.customer_location,
         created_at=machine.created_at,
-        status=derived_status,
+        connectivity=conn,
+        operating_state=machine.last_state,
+        has_active_faults=bool(faults),
+        active_faults=faults,
         last_event_ts=machine.last_event_ts,
-        last_state=machine.last_state,
         last_temp=machine.last_temp,
         last_cooling=machine.last_cooling,
-        active_faults=machine.active_faults or [],
         last_received_at=machine.last_received_at,
     )
 

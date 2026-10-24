@@ -95,7 +95,7 @@ def run_simulation():
     print("\n=== Step 5: Query Current Fleet Status (Derived at Read Time) ===")
     fleet = client.get("/machines").json()
     for m in fleet:
-        print(f"Machine: {m['id']} | Status: {m['status']} | Last State: {m['last_state']} | Temp: {m['last_temp']} C | Faults: {m['active_faults']}")
+        print(f"Machine: {m['id']} | Connectivity: {m['connectivity']} | State: {m['operating_state']} | Temp: {m['last_temp']} C | Faults: {m['active_faults']}")
 
 
 if __name__ == "__main__":

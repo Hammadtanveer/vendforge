@@ -5,7 +5,7 @@ from app.models import Machine, Telemetry
 
 
 def test_machine_registration_and_unknown_status(client):
-    """A registered machine that has never reported has UNKNOWN status."""
+    """A registered machine that has never reported has UNKNOWN connectivity, null operating_state."""
     resp = client.post(
         "/machines",
         json={
@@ -17,7 +17,9 @@ def test_machine_registration_and_unknown_status(client):
     assert resp.status_code == 201
     data = resp.json()
     assert data["id"] == "bb-101"
-    assert data["status"] == "UNKNOWN"
+    assert data["connectivity"] == "UNKNOWN"
+    assert data["operating_state"] is None
+    assert data["has_active_faults"] is False
     assert data["last_received_at"] is None
 
     # Duplicate registration should return 409
@@ -32,8 +34,8 @@ def test_machine_registration_and_unknown_status(client):
     assert dup_resp.status_code == 409
 
 
-def test_telemetry_future_timestamp_rejected(client):
-    """Items with ts > now + 5 min must be rejected."""
+def test_telemetry_future_timestamp_rejected(client, db_session):
+    """Items with ts > now + 5 min must be rejected; zero telemetry rows stored."""
     client.post(
         "/machines",
         json={"id": "bb-102", "name": "Machine 102", "customer_location": "Airport"},
@@ -61,9 +63,13 @@ def test_telemetry_future_timestamp_rejected(client):
     assert data["results"][0]["status"] == "rejected"
     assert "Future timestamp" in data["results"][0]["reason"]
 
+    # Strengthened: assert zero telemetry rows exist in PostgreSQL for the rejected item
+    count = db_session.query(Telemetry).filter(Telemetry.machine_id == "bb-102").count()
+    assert count == 0
 
-def test_telemetry_unknown_machine_rejected(client):
-    """Telemetry for non-registered machine is rejected (no auto-register)."""
+
+def test_telemetry_unknown_machine_rejected(client, db_session):
+    """Telemetry for non-registered machine is rejected (no auto-register); zero rows stored."""
     now_ts = datetime.now(timezone.utc).isoformat()
     resp = client.post(
         "/telemetry",
@@ -83,6 +89,10 @@ def test_telemetry_unknown_machine_rejected(client):
     assert data["rejected"] == 1
     assert data["results"][0]["status"] == "rejected"
     assert "Unknown machine_id" in data["results"][0]["reason"]
+
+    # Strengthened: assert zero telemetry rows exist in PostgreSQL for the unregistered item
+    count = db_session.query(Telemetry).filter(Telemetry.machine_id == "unregistered-01").count()
+    assert count == 0
 
 
 def test_telemetry_duplicate_ignored(client):
@@ -134,7 +144,8 @@ def test_telemetry_duplicate_ignored(client):
     inspect_resp = client.get("/machines/bb-103")
     assert inspect_resp.status_code == 200
     assert float(inspect_resp.json()["last_temp"]) == 3.8
-    assert inspect_resp.json()["last_state"] == "IDLE"
+    assert inspect_resp.json()["operating_state"] == "IDLE"
+    assert inspect_resp.json()["connectivity"] == "ONLINE"
 
 
 def test_out_of_order_telemetry_ordering(client):
@@ -166,7 +177,7 @@ def test_out_of_order_telemetry_ordering(client):
 
     # Machine state is VENDING
     m_check1 = client.get("/machines/bb-104").json()
-    assert m_check1["last_state"] == "VENDING"
+    assert m_check1["operating_state"] == "VENDING"
 
     # 2. Ingest delayed older event later
     resp_older = client.post(
@@ -186,7 +197,7 @@ def test_out_of_order_telemetry_ordering(client):
 
     # Machine snapshot must still reflect the newer event (VENDING at t_newer), not IDLE
     m_check2 = client.get("/machines/bb-104").json()
-    assert m_check2["last_state"] == "VENDING"
+    assert m_check2["operating_state"] == "VENDING"
     assert float(m_check2["last_temp"]) == 4.1
 
 
@@ -218,7 +229,8 @@ def test_reconnect_burst_batch(client):
 
     # Latest state must be the highest ts (t3 -> IDLE)
     m = client.get("/machines/bb-105").json()
-    assert m["last_state"] == "IDLE"
+    assert m["operating_state"] == "IDLE"
+    assert m["connectivity"] == "ONLINE"
 
     # Check history endpoint is strictly ordered by ts DESC
     hist_resp = client.get("/machines/bb-105/history")
@@ -254,11 +266,12 @@ def test_offline_threshold_derivation(client, db_session):
 
     resp = client.get("/machines/bb-106")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "OFFLINE"
+    assert resp.json()["connectivity"] == "OFFLINE"
+    assert resp.json()["operating_state"] == "IDLE"
 
 
 def test_error_status_derivation(client):
-    """Active faults derive to ERROR status if recently received."""
+    """Active faults set has_active_faults=True while connectivity remains ONLINE if recently received."""
     client.post(
         "/machines",
         json={"id": "bb-107", "name": "Machine 107", "customer_location": "Hospital"},
@@ -281,8 +294,10 @@ def test_error_status_derivation(client):
     resp = client.get("/machines/bb-107")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "ERROR"
+    assert data["connectivity"] == "ONLINE"
+    assert data["has_active_faults"] is True
     assert "E01_TEMP_HIGH" in data["active_faults"]
+    assert "E04_COMPRESSOR_FAIL" in data["active_faults"]
 
 
 def test_batch_size_cap(client):
@@ -346,4 +361,205 @@ def test_mid_batch_error_rollback(client, db_session):
     assert machine.last_state is None
     assert machine.last_temp is None
     assert machine.last_received_at is None
-    assert machine.derive_status() == "UNKNOWN"
+    assert machine.derive_connectivity() == "UNKNOWN"
+
+
+# --- New Phase 5 Tests ---
+
+def test_offline_machine_keeps_last_state(client, db_session):
+    """After >180s gap, connectivity is OFFLINE, operating_state and last_event_ts are still last known."""
+    client.post(
+        "/machines",
+        json={"id": "bb-201", "name": "Machine 201", "customer_location": "Airport East"},
+    )
+    event_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    client.post(
+        "/telemetry",
+        json={
+            "items": [
+                {
+                    "machine_id": "bb-201",
+                    "ts": event_time.isoformat(),
+                    "cabinet_temp_c": 3.9,
+                    "cooling_status": "NORMAL",
+                    "operating_state": "VENDING",
+                }
+            ]
+        },
+    )
+
+    # Set last_received_at to 200s ago (> 180s)
+    past_rec = datetime.now(timezone.utc) - timedelta(seconds=200)
+    db_session.query(Machine).filter(Machine.id == "bb-201").update(
+        {"last_received_at": past_rec}
+    )
+    db_session.commit()
+
+    resp = client.get("/machines/bb-201")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["connectivity"] == "OFFLINE"
+    assert data["operating_state"] == "VENDING"
+    assert data["last_event_ts"] is not None
+    assert float(data["last_temp"]) == 3.9
+
+
+def test_reconnect_with_only_old_data(client):
+    """
+    Machine has newer snapshot, then a batch with only older ts arrives.
+    Assert connectivity ONLINE, snapshot (operating_state, last_event_ts, last_temp) unchanged,
+    and old rows exist in history.
+    """
+    client.post(
+        "/machines",
+        json={"id": "bb-202", "name": "Machine 202", "customer_location": "Tech Hub"},
+    )
+    now = datetime.now(timezone.utc)
+    ts_newer = now - timedelta(minutes=1)
+    ts_older = now - timedelta(minutes=15)
+
+    # Ingest newer report first
+    client.post(
+        "/telemetry",
+        json={
+            "items": [
+                {
+                    "machine_id": "bb-202",
+                    "ts": ts_newer.isoformat(),
+                    "cabinet_temp_c": 4.2,
+                    "operating_state": "VENDING",
+                }
+            ]
+        },
+    )
+
+    # Ingest batch with ONLY older data
+    resp = client.post(
+        "/telemetry",
+        json={
+            "items": [
+                {
+                    "machine_id": "bb-202",
+                    "ts": ts_older.isoformat(),
+                    "cabinet_temp_c": 2.8,
+                    "operating_state": "IDLE",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["inserted"] == 1
+
+    # Verify machine snapshot: connectivity ONLINE, state & temp still from newer report
+    m = client.get("/machines/bb-202").json()
+    assert m["connectivity"] == "ONLINE"
+    assert m["operating_state"] == "VENDING"
+    assert float(m["last_temp"]) == 4.2
+    assert datetime.fromisoformat(m["last_event_ts"]) == ts_newer
+
+    # Verify both records exist in history
+    hist = client.get("/machines/bb-202/history").json()
+    assert len(hist) == 2
+    assert datetime.fromisoformat(hist[0]["ts"]) == ts_newer
+    assert datetime.fromisoformat(hist[1]["ts"]) == ts_older
+
+
+def test_never_reported_is_unknown(client):
+    """Machine that has never reported has connectivity UNKNOWN, operating_state null, has_active_faults false."""
+    client.post(
+        "/machines",
+        json={"id": "bb-203", "name": "Machine 203", "customer_location": "Depot"},
+    )
+    resp = client.get("/machines/bb-203")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["connectivity"] == "UNKNOWN"
+    assert data["operating_state"] is None
+    assert data["has_active_faults"] is False
+    assert data["active_faults"] == []
+    assert data["last_event_ts"] is None
+    assert data["last_received_at"] is None
+
+
+def test_faults_do_not_change_connectivity(client):
+    """Machine with active faults and recent report shows connectivity ONLINE and has_active_faults true."""
+    client.post(
+        "/machines",
+        json={"id": "bb-204", "name": "Machine 204", "customer_location": "North Station"},
+    )
+    now_ts = datetime.now(timezone.utc).isoformat()
+    client.post(
+        "/telemetry",
+        json={
+            "items": [
+                {
+                    "machine_id": "bb-204",
+                    "ts": now_ts,
+                    "cabinet_temp_c": 9.5,
+                    "operating_state": "ERROR",
+                    "error_codes": ["E02_PRESSURE_LOW"],
+                }
+            ]
+        },
+    )
+    resp = client.get("/machines/bb-204")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["connectivity"] == "ONLINE"
+    assert data["has_active_faults"] is True
+    assert data["active_faults"] == ["E02_PRESSURE_LOW"]
+    assert data["operating_state"] == "ERROR"
+
+
+def test_equal_ts_first_write_wins(client, db_session):
+    """Same machine_id and ts sent twice with different temperatures; history and snapshot keep the first."""
+    client.post(
+        "/machines",
+        json={"id": "bb-205", "name": "Machine 205", "customer_location": "South Bay"},
+    )
+    ts = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat()
+
+    # First write
+    resp1 = client.post(
+        "/telemetry",
+        json={
+            "items": [
+                {
+                    "machine_id": "bb-205",
+                    "ts": ts,
+                    "cabinet_temp_c": 3.4,
+                    "operating_state": "IDLE",
+                }
+            ]
+        },
+    )
+    assert resp1.status_code == 200
+    assert resp1.json()["inserted"] == 1
+
+    # Second write with identical ts but different temperature
+    resp2 = client.post(
+        "/telemetry",
+        json={
+            "items": [
+                {
+                    "machine_id": "bb-205",
+                    "ts": ts,
+                    "cabinet_temp_c": 8.7,
+                    "operating_state": "VENDING",
+                }
+            ]
+        },
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["duplicate"] == 1
+
+    # History keeps the first write
+    history = client.get("/machines/bb-205/history").json()
+    assert len(history) == 1
+    assert float(history[0]["cabinet_temp_c"]) == 3.4
+    assert history[0]["operating_state"] == "IDLE"
+
+    # Snapshot keeps the first write
+    m = client.get("/machines/bb-205").json()
+    assert float(m["last_temp"]) == 3.4
+    assert m["operating_state"] == "IDLE"

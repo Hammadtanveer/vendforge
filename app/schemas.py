@@ -15,12 +15,13 @@ class MachineResponse(BaseModel):
     name: str
     customer_location: str
     created_at: datetime
-    status: str
+    connectivity: Literal["ONLINE", "OFFLINE", "UNKNOWN"]
+    operating_state: Optional[str] = None
+    has_active_faults: bool = False
+    active_faults: List[str] = Field(default_factory=list)
     last_event_ts: Optional[datetime] = None
-    last_state: Optional[str] = None
     last_temp: Optional[Decimal] = None
     last_cooling: Optional[str] = None
-    active_faults: List[str] = Field(default_factory=list)
     last_received_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

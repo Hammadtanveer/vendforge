@@ -20,9 +20,15 @@
   - Native `ARRAY(String)` and `pg_insert`.
   - Automated session fixture applying `db/init.sql` and per-test `TRUNCATE CASCADE` isolation.
   - Real database error rollback test under `NUMERIC(5,2)` overflow.
-  - 11/11 tests passing on PostgreSQL 16.
 
 - [x] **Phase 4: Design Documentation & Simulator**
   - `DESIGN.md` detailing architecture, scale math, reliability matrix, failure modes, and evolution.
   - `README.md` with step-by-step setup and `curl` API examples.
   - `scripts/simulate_fleet.py` for end-to-end fleet simulation.
+
+- [x] **Phase 5: Status Field Split & Test Hardening**
+  - Separated `connectivity` (`ONLINE`, `OFFLINE`, `UNKNOWN`) from `operating_state` in `MachineResponse`.
+  - Added `has_active_faults` boolean and `active_faults` list.
+  - Ensured `tests/conftest.py` drops and recreates `public` schema on session startup.
+  - Strengthened rejection tests to verify zero telemetry rows persisted in PostgreSQL.
+  - Added tests for offline state preservation, old-data-only reconnect, UNKNOWN on never reported, fault/connectivity orthogonality, and equal timestamp first-write-wins.
